@@ -51,15 +51,22 @@ const textDocumentSyncFull = 1
 var triggerCharacters = []string{"`", `"`, ",", ";", "|", ":", "=", " "}
 
 type server struct {
-	docs     map[string]string // URI -> full text
-	keys     []catalog.Key     // built-in keys with the user's settings applied
-	problems []string          // ignored settings, reported after initialize
-	out      io.Writer
-	shutdown bool
+	docs       map[string]string // URI -> full text
+	keys       []catalog.Key     // built-in keys with the user's settings applied
+	typeSearch string            // typeSearchPackage or typeSearchFile
+	problems   []string          // ignored settings, reported after initialize
+	fileCache  map[string]cachedFile
+	out        io.Writer
+	shutdown   bool
 }
 
 func newServer() *server {
-	return &server{docs: map[string]string{}, keys: catalog.Keys}
+	return &server{
+		docs:       map[string]string{},
+		keys:       catalog.Keys,
+		typeSearch: typeSearchPackage,
+		fileCache:  map[string]cachedFile{},
+	}
 }
 
 type initializeParams struct {
@@ -77,6 +84,13 @@ func (s *server) configure(raw json.RawMessage) {
 		return
 	}
 	s.keys, s.problems = catalog.Configure(cfg)
+	switch cfg.TypeSearch {
+	case "", typeSearchPackage:
+	case typeSearchFile:
+		s.typeSearch = typeSearchFile
+	default:
+		s.problems = append(s.problems, `type_search: unknown value "`+cfg.TypeSearch+`" (use "package" or "file")`)
+	}
 }
 
 // notify sends a server-to-client notification.

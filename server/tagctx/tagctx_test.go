@@ -70,6 +70,7 @@ func TestPositions(t *testing.T) {
 			tt.want.FieldNames = []string{"ID"}
 			tt.want.FieldType = "string"
 			tt.want.SiblingFields = []string{"Name"}
+			tt.want.StructName = "User"
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("\n got  %+v\n want %+v", got, tt.want)
 			}

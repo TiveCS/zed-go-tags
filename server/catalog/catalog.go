@@ -84,12 +84,17 @@ func optionName(part string) string {
 
 // Used reports whether option o already appears in parts.
 func (k Key) Used(o Option, parts []string) bool {
+	return o.UsedIn(parts, k.FoldCase)
+}
+
+// UsedIn reports whether o already appears in parts.
+func (o Option) UsedIn(parts []string, foldCase bool) bool {
 	for _, p := range parts {
 		n := optionName(p)
 		if !o.TakesArg() {
 			n = strings.TrimRight(n, "=:") // gorm "<-:create" uses "<-"
 		}
-		if n == o.Name || (k.FoldCase && strings.EqualFold(n, o.Name)) {
+		if n == o.Name || (foldCase && strings.EqualFold(n, o.Name)) {
 			return true
 		}
 	}

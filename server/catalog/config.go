@@ -20,6 +20,9 @@ type Config struct {
 	// CustomKeys adds Tag Keys, each with its Naming Style. They are listed
 	// after the built-in keys, alphabetically.
 	CustomKeys map[string]naming.Style `json:"custom_keys"`
+	// TypeSearch is where other types are looked up: "package" (default) or "file".
+	// Validated by the server.
+	TypeSearch string `json:"type_search"`
 }
 
 // Configure returns the built-in Keys with cfg applied, plus a description of

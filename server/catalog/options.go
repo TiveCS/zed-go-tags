@@ -10,8 +10,10 @@ type Option struct {
 	// Args are suggested Option Arguments. Options without a trailing
 	// '=' / ':' (gorm "<-", "->", "-") take them after an optional ':'.
 	Args []Arg
-	// FieldRef makes the Option Argument a reference to sibling fields.
-	FieldRef FieldRef
+	// Source says where Option Argument suggestions come from besides Args.
+	Source ArgSource
+	// SubOptions follow the first ,-part of the argument (gorm index:name,sort:desc).
+	SubOptions []Option
 }
 
 // Arg is a suggested Option Argument.
@@ -23,14 +25,18 @@ type Arg struct {
 	For Class
 }
 
-// FieldRef says how an Option Argument refers to sibling fields.
-type FieldRef int
+// ArgSource says where Option Argument suggestions come from.
+type ArgSource int
 
 const (
-	NoFieldRef FieldRef = iota
-	OneField            // eqfield=Password
-	FieldList           // required_with=Email Phone
-	FieldPairs          // required_if=Status active Role admin
+	FromArgs          ArgSource = iota // the option's Args
+	OneField                           // a sibling field: eqfield=Password
+	FieldList                          // sibling fields: required_with=Email Phone
+	FieldPairs                         // field/value pairs: required_if=Status active Role admin
+	RelationFields                     // this struct's and the related struct's fields: foreignKey:OwnerID
+	RelatedFields                      // the related struct's fields: polymorphicType:OwnerType
+	PolymorphicPrefix                  // X where the related struct has XID and XType: polymorphic:Owner
+	Constants                          // typed constants of the field's type: oneof=active inactive
 )
 
 // TakesArg reports whether the option is followed by an argument.
@@ -42,21 +48,21 @@ func (o Option) TakesArg() bool {
 var jsonOptions = []Option{
 	{Name: "omitempty", Detail: "omit if empty value"},
 	{Name: "omitzero", Detail: "omit if zero value (Go 1.24+)"},
-	{Name: "string", Detail: "encode number/bool as JSON string"},
+	{Name: "string", Detail: "encode number/bool as JSON string", For: String | Number | Bool},
 }
 
 var yamlOptions = []Option{
 	{Name: "omitempty", Detail: "omit if empty value"},
-	{Name: "flow", Detail: "use flow style"},
-	{Name: "inline", Detail: "inline struct or map fields"},
+	{Name: "flow", Detail: "use flow style", For: Slice | Map | Struct},
+	{Name: "inline", Detail: "inline struct or map fields", For: Struct | Map},
 }
 
 var xmlOptions = []Option{
-	{Name: "attr", Detail: "encode as XML attribute"},
-	{Name: "chardata", Detail: "encode as character data"},
-	{Name: "cdata", Detail: "encode as CDATA section"},
-	{Name: "innerxml", Detail: "write raw inner XML"},
-	{Name: "comment", Detail: "encode as XML comment"},
+	{Name: "attr", Detail: "encode as XML attribute", For: String | Number | Bool | Slice | Map | Time},
+	{Name: "chardata", Detail: "encode as character data", For: String | Number | Bool | Slice | Map | Time},
+	{Name: "cdata", Detail: "encode as CDATA section", For: String | Number | Bool | Slice | Map | Time},
+	{Name: "innerxml", Detail: "write raw inner XML", For: String | Number | Bool | Slice | Map | Time},
+	{Name: "comment", Detail: "encode as XML comment", For: String | Number | Bool | Slice | Map | Time},
 	{Name: "any", Detail: "match any unmatched element"},
 	{Name: "omitempty", Detail: "omit if empty value"},
 }
@@ -64,21 +70,21 @@ var xmlOptions = []Option{
 var tomlOptions = []Option{
 	{Name: "omitempty", Detail: "omit if empty value"},
 	{Name: "omitzero", Detail: "omit if zero value"},
-	{Name: "multiline", Detail: "encode string as multiline"},
-	{Name: "inline", Detail: "encode table inline"},
+	{Name: "multiline", Detail: "encode string as multiline", For: String},
+	{Name: "inline", Detail: "encode table inline", For: Struct | Map},
 }
 
 var bsonOptions = []Option{
 	{Name: "omitempty", Detail: "omit if empty value"},
 	{Name: "omitzero", Detail: "omit if zero value"},
-	{Name: "minsize", Detail: "store int64 as int32 if it fits"},
-	{Name: "truncate", Detail: "allow lossy float→int decode"},
-	{Name: "inline", Detail: "inline struct or map fields"},
+	{Name: "minsize", Detail: "store int64 as int32 if it fits", For: Integer},
+	{Name: "truncate", Detail: "allow lossy float→int decode", For: Integer},
+	{Name: "inline", Detail: "inline struct or map fields", For: Struct | Map},
 }
 
 var mapstructureOptions = []Option{
-	{Name: "squash", Detail: "flatten embedded struct"},
-	{Name: "remain", Detail: "collect unmapped keys (map field)"},
+	{Name: "squash", Detail: "flatten embedded struct", For: Struct},
+	{Name: "remain", Detail: "collect unmapped keys (map field)", For: Map},
 	{Name: "omitempty", Detail: "omit if empty value"},
 }
 
@@ -86,7 +92,7 @@ var mapstructureOptions = []Option{
 var gormOptions = []Option{
 	{Name: "primaryKey", Detail: "primary key"},
 	{Name: "type:", Detail: "column data type", Args: pgTypes},
-	{Name: "size:", Detail: "column size/length"},
+	{Name: "size:", Detail: "column size/length", For: String | Integer | Slice},
 	{Name: "not null", Detail: "NOT NULL constraint"},
 	{Name: "unique", Detail: "unique constraint"},
 	{Name: "default:", Detail: "column default value", Args: []Arg{
@@ -99,14 +105,15 @@ var gormOptions = []Option{
 		{Value: "''", Detail: "empty string", For: String},
 	}},
 	{Name: "index", Detail: "create index"},
-	{Name: "index:", Detail: "create named/composite index"},
+	{Name: "index:", Detail: "create named/composite index", SubOptions: indexOptions},
 	{Name: "uniqueIndex", Detail: "create unique index"},
-	{Name: "uniqueIndex:", Detail: "create named unique index"},
-	{Name: "autoIncrement", Detail: "auto increment"},
-	{Name: "autoCreateTime", Detail: "set to now on create"},
-	{Name: "autoUpdateTime", Detail: "set to now on create/update"},
-	{Name: "precision:", Detail: "numeric precision"},
-	{Name: "scale:", Detail: "numeric scale"},
+	{Name: "uniqueIndex:", Detail: "create named unique index", SubOptions: indexOptions},
+	{Name: "autoIncrement", Detail: "auto increment", For: Integer},
+	{Name: "autoIncrementIncrement:", Detail: "auto increment step", For: Integer},
+	{Name: "autoCreateTime", Detail: "set to now on create (:milli / :nano for ints)", For: Time | Integer, Args: timeUnits},
+	{Name: "autoUpdateTime", Detail: "set to now on create/update (:milli / :nano for ints)", For: Time | Integer, Args: timeUnits},
+	{Name: "precision:", Detail: "numeric/time precision", For: Float | Time},
+	{Name: "scale:", Detail: "numeric scale", For: Float},
 	{Name: "comment:", Detail: "column comment"},
 	{Name: "check:", Detail: "check constraint"},
 	{Name: "serializer:", Detail: "serializer (json, gob, unixtime)", Args: []Arg{
@@ -114,20 +121,23 @@ var gormOptions = []Option{
 		{Value: "gob", Detail: "store as gob"},
 		{Value: "unixtime", Detail: "store time as unix seconds"},
 	}},
-	{Name: "embedded", Detail: "embed struct fields"},
-	{Name: "embeddedPrefix:", Detail: "prefix for embedded columns"},
-	{Name: "foreignKey:", Detail: "foreign key field"},
-	{Name: "references:", Detail: "referenced field"},
-	{Name: "constraint:", Detail: "relation constraint (OnUpdate/OnDelete)", Args: []Arg{
+	{Name: "embedded", Detail: "embed struct fields", For: Struct},
+	{Name: "embeddedPrefix:", Detail: "prefix for embedded columns", For: Struct},
+	{Name: "foreignKey:", Detail: "foreign key field", For: relation, Source: RelationFields},
+	{Name: "references:", Detail: "referenced field", For: relation, Source: RelationFields},
+	{Name: "constraint:", Detail: "relation constraint (OnUpdate/OnDelete)", For: relation, Args: []Arg{
 		{Value: "OnUpdate:CASCADE,OnDelete:SET NULL"},
 		{Value: "OnUpdate:CASCADE,OnDelete:CASCADE"},
 		{Value: "OnDelete:SET NULL"},
 		{Value: "OnDelete:CASCADE"},
 	}},
-	{Name: "many2many:", Detail: "join table name"},
-	{Name: "joinForeignKey:", Detail: "join table foreign key"},
-	{Name: "joinReferences:", Detail: "join table reference"},
-	{Name: "polymorphic:", Detail: "polymorphic relation"},
+	{Name: "many2many:", Detail: "join table name", For: StructSlice},
+	{Name: "joinForeignKey:", Detail: "join table foreign key", For: StructSlice, Source: RelationFields},
+	{Name: "joinReferences:", Detail: "join table reference", For: StructSlice, Source: RelationFields},
+	{Name: "polymorphic:", Detail: "polymorphic relation (prefix of XID/XType fields)", For: relation, Source: PolymorphicPrefix},
+	{Name: "polymorphicType:", Detail: "related type column field", For: relation, Source: RelatedFields},
+	{Name: "polymorphicId:", Detail: "related id column field", For: relation, Source: RelatedFields},
+	{Name: "polymorphicValue:", Detail: "value stored in the type column", For: relation},
 	{Name: "<-", Detail: "write permission (<-:create, <-:update, <-:false)", Args: []Arg{
 		{Value: "create", Detail: "write on create only"},
 		{Value: "update", Detail: "write on update only"},
@@ -140,6 +150,32 @@ var gormOptions = []Option{
 		{Value: "migration", Detail: "ignore in migration only"},
 		{Value: "all", Detail: "ignore for read, write and migration"},
 	}},
+}
+
+// relation fields are structs or slices of structs (belongs-to, has-one, has-many, many2many).
+const relation = Struct | StructSlice
+
+var timeUnits = []Arg{
+	{Value: "milli", Detail: "unix milliseconds (int field)", For: Integer},
+	{Value: "nano", Detail: "unix nanoseconds (int field)", For: Integer},
+}
+
+// indexOptions follow the index name: index:idx_email,sort:desc,type:btree.
+var indexOptions = []Option{
+	{Name: "unique", Detail: "unique index"},
+	{Name: "sort:", Detail: "column sort order", Args: []Arg{{Value: "desc"}, {Value: "asc"}}},
+	{Name: "type:", Detail: "index method", Args: []Arg{
+		{Value: "btree"}, {Value: "hash"}, {Value: "gin", Detail: "jsonb, arrays, full text"},
+		{Value: "gist"}, {Value: "brin"},
+	}},
+	{Name: "where:", Detail: "partial index condition"},
+	{Name: "composite:", Detail: "composite index id shared across fields"},
+	{Name: "priority:", Detail: "column order in composite index"},
+	{Name: "expression:", Detail: "index on an expression"},
+	{Name: "class:", Detail: "index class"},
+	{Name: "length:", Detail: "prefix length"},
+	{Name: "option:", Detail: "extra index option"},
+	{Name: "collate:", Detail: "collation"},
 }
 
 // pgTypes are Postgres column types for gorm's type:, grouped by Go type.
@@ -193,22 +229,22 @@ var validateOptions = []Option{
 	{Name: "omitempty", Detail: "skip rules if empty"},
 	{Name: "omitnil", Detail: "skip rules if nil"},
 	{Name: "isdefault", Detail: "must be zero value"},
-	{Name: "required_if=", Detail: "required if Field value …", FieldRef: FieldPairs},
-	{Name: "required_unless=", Detail: "required unless Field value …", FieldRef: FieldPairs},
-	{Name: "required_with=", Detail: "required if any field present", FieldRef: FieldList},
-	{Name: "required_with_all=", Detail: "required if all fields present", FieldRef: FieldList},
-	{Name: "required_without=", Detail: "required if any field absent", FieldRef: FieldList},
-	{Name: "required_without_all=", Detail: "required if all fields absent", FieldRef: FieldList},
-	{Name: "excluded_if=", Detail: "must be empty if Field value …", FieldRef: FieldPairs},
-	{Name: "excluded_unless=", Detail: "must be empty unless Field value …", FieldRef: FieldPairs},
-	{Name: "excluded_with=", Detail: "must be empty if field present", FieldRef: FieldList},
-	{Name: "excluded_without=", Detail: "must be empty if field absent", FieldRef: FieldList},
-	{Name: "eqfield=", Detail: "equal to another field", FieldRef: OneField},
-	{Name: "nefield=", Detail: "not equal to another field", FieldRef: OneField},
-	{Name: "gtfield=", Detail: "greater than another field", For: ordered, FieldRef: OneField},
-	{Name: "gtefield=", Detail: "≥ another field", For: ordered, FieldRef: OneField},
-	{Name: "ltfield=", Detail: "less than another field", For: ordered, FieldRef: OneField},
-	{Name: "ltefield=", Detail: "≤ another field", For: ordered, FieldRef: OneField},
+	{Name: "required_if=", Detail: "required if Field value …", Source: FieldPairs},
+	{Name: "required_unless=", Detail: "required unless Field value …", Source: FieldPairs},
+	{Name: "required_with=", Detail: "required if any field present", Source: FieldList},
+	{Name: "required_with_all=", Detail: "required if all fields present", Source: FieldList},
+	{Name: "required_without=", Detail: "required if any field absent", Source: FieldList},
+	{Name: "required_without_all=", Detail: "required if all fields absent", Source: FieldList},
+	{Name: "excluded_if=", Detail: "must be empty if Field value …", Source: FieldPairs},
+	{Name: "excluded_unless=", Detail: "must be empty unless Field value …", Source: FieldPairs},
+	{Name: "excluded_with=", Detail: "must be empty if field present", Source: FieldList},
+	{Name: "excluded_without=", Detail: "must be empty if field absent", Source: FieldList},
+	{Name: "eqfield=", Detail: "equal to another field", Source: OneField},
+	{Name: "nefield=", Detail: "not equal to another field", Source: OneField},
+	{Name: "gtfield=", Detail: "greater than another field", For: ordered, Source: OneField},
+	{Name: "gtefield=", Detail: "≥ another field", For: ordered, Source: OneField},
+	{Name: "ltfield=", Detail: "less than another field", For: ordered, Source: OneField},
+	{Name: "ltefield=", Detail: "≤ another field", For: ordered, Source: OneField},
 
 	// size / comparison
 	{Name: "len=", Detail: "exact length / value", For: sized},
@@ -224,7 +260,7 @@ var validateOptions = []Option{
 	{Name: "gte=", Detail: "greater than or equal", For: sized},
 	{Name: "lt=", Detail: "less than", For: sized},
 	{Name: "lte=", Detail: "less than or equal", For: sized},
-	{Name: "oneof=", Detail: "one of space-separated values", For: String | Number},
+	{Name: "oneof=", Detail: "one of space-separated values", For: String | Number, Source: Constants},
 
 	// collections
 	{Name: "dive", Detail: "apply following rules to elements", For: Slice | Map},

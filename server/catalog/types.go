@@ -2,8 +2,9 @@ package catalog
 
 import "strings"
 
-// Class is a coarse grouping of Go field types, used to filter validate rules.
-type Class uint8
+// Class is a coarse grouping of Go field types, used to filter options and
+// Option Arguments by the field they are written on.
+type Class uint16
 
 const (
 	String Class = 1 << iota
@@ -12,23 +13,40 @@ const (
 	Bool
 	Slice // slices and arrays
 	Map
-	Time // time.Time
+	Time        // time.Time
+	Struct      // a struct type (named or inline)
+	StructSlice // a slice/array of structs ([]Order, []*Order); combined with Slice
 
 	Number = Integer | Float
 
-	// Any matches every class: used for rules that apply to all types,
-	// and for named types we can't see through (e.g. type Status string).
-	Any Class = 0xFF
+	// Any matches every class: used for named types we can't see through
+	// (other packages, or no package index).
+	Any Class = 0xFFFF
 )
 
-// Classify maps a Go type as written (e.g. "*[]string", "time.Time") to its Class.
-func Classify(typ string) Class {
+// Resolver looks up a named type declared in the current package, reporting
+// its underlying type as written ("string", "[]int"; "struct" for structs).
+type Resolver func(name string) (underlying string, isStruct, ok bool)
+
+// Classify maps a Go type as written (e.g. "*[]string", "time.Time", "Status")
+// to its Class. resolve may be nil.
+func Classify(typ string, resolve Resolver) Class {
+	return classify(typ, resolve, 0)
+}
+
+func classify(typ string, resolve Resolver, depth int) Class {
 	typ = strings.TrimLeft(typ, "*")
 	switch {
 	case strings.HasPrefix(typ, "["):
-		return Slice
+		c := Slice
+		if i := strings.IndexByte(typ, ']'); i >= 0 && classify(typ[i+1:], resolve, depth+1) == Struct {
+			c |= StructSlice
+		}
+		return c
 	case strings.HasPrefix(typ, "map["):
 		return Map
+	case strings.HasPrefix(typ, "struct{"), strings.HasPrefix(typ, "struct {"):
+		return Struct
 	}
 	switch typ {
 	case "string":
@@ -43,6 +61,14 @@ func Classify(typ string) Class {
 		return Float
 	case "time.Time":
 		return Time
+	}
+	if resolve != nil && depth < 8 && !strings.Contains(typ, ".") {
+		if u, isStruct, ok := resolve(typ); ok {
+			if isStruct {
+				return Struct
+			}
+			return classify(u, resolve, depth+1)
+		}
 	}
 	return Any
 }

@@ -56,13 +56,13 @@ const src = "package x\n\ntype User struct {\n\tID string `\n\tName string\n}\n"
 
 func open() map[string]any {
 	return map[string]any{"method": "textDocument/didOpen", "params": map[string]any{
-		"textDocument": map[string]any{"uri": "file:///x.go", "languageId": "go", "version": 1, "text": src},
+		"textDocument": map[string]any{"uri": testURI, "languageId": "go", "version": 1, "text": src},
 	}}
 }
 
 func complete(id, line, char int) map[string]any {
 	return map[string]any{"id": id, "method": "textDocument/completion", "params": map[string]any{
-		"textDocument": map[string]any{"uri": "file:///x.go"},
+		"textDocument": map[string]any{"uri": testURI},
 		"position":     map[string]any{"line": line, "character": char},
 	}}
 }
@@ -129,7 +129,7 @@ func TestSettingsApplyToCompletion(t *testing.T) {
 		}},
 		map[string]any{"method": "initialized", "params": map[string]any{}},
 		map[string]any{"method": "textDocument/didOpen", "params": map[string]any{
-			"textDocument": map[string]any{"uri": "file:///x.go", "languageId": "go", "version": 1, "text": src},
+			"textDocument": map[string]any{"uri": testURI, "languageId": "go", "version": 1, "text": src},
 		}},
 		complete(2, 3, 22), // inside json:"|"
 		complete(3, 4, 14), // key slot on Name
@@ -176,3 +176,7 @@ func sessionWithNotes(t *testing.T, reqs ...map[string]any) (map[string]*message
 	}
 	return replies, notes
 }
+
+// testURI points into a folder that doesn't exist, so the package index
+// only sees the document itself.
+const testURI = "file:///go-tags-test-nonexistent/x.go"

@@ -27,6 +27,14 @@ Runs alongside `gopls`; it only answers inside a struct field's backticks.
 
 Acronyms count as one word: `UserID` → `user_id` / `userId`, `HTTPServer` → `http_server`.
 
+It reads the whole package (every `.go` file in the folder, including unsaved open files), so it can:
+
+- **filter by the real type**: `type Status string` gets string rules; options like `yaml:",flow"`, `bson:",minsize"`, `mapstructure:",squash"` and gorm's `autoIncrement` / `precision:` only appear on fields they apply to
+- **gorm relations**: `foreignKey:` / `references:` suggest fields of this struct and of the related one (`Orders []Order` → `Order`'s fields); `polymorphic:` suggests prefixes `X` where the related struct has `XID` and `XType`
+- **gorm indexes**: `index:idx_name,` → `unique`, `sort:desc`, `type:gin`, `where:`, …
+- **validate `oneof=`**: suggests the constants of the field's type (`StatusActive Status = "active"` → `active inactive banned`)
+- **env on a struct field**: suggests go-envconfig's `env:", prefix=DATABASE_"`
+
 ## Install
 
 In Zed: **zed: extensions** → **Install Dev Extension** → pick the `extension/` folder of this repo.
@@ -64,6 +72,7 @@ In Zed's `settings.json`:
           "json": "camelCase",
           "env": "SCREAMING_SNAKE"
         },
+        "type_search": "package",
         "custom_keys": {
           "mytag": "snake_case"
         }
@@ -75,6 +84,7 @@ In Zed's `settings.json`:
 
 - `naming` — change the value style of a built-in key (not `validate`, which has no name).
 - `custom_keys` — add your own keys with a style. They appear after the built-in keys.
+- `type_search` — where other types and constants are looked up: `"package"` (default, every `.go` file in the folder) or `"file"` (only the current file).
 
 Styles: `snake_case`, `camelCase`, `PascalCase`, `SCREAMING_SNAKE`, `kebab-case`, `Header-Case`.
 

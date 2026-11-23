@@ -7,6 +7,8 @@ import (
 	"go/token"
 	"go/types"
 	"strings"
+
+	"go-tags-ls/pkgindex"
 )
 
 // Position is the part of a Struct Tag the cursor is in.
@@ -31,6 +33,9 @@ type Context struct {
 	FieldNames []string
 	FieldType  string // Go type as written, e.g. "string", "*time.Time", "[]int"
 	Embedded   bool
+	// StructName is the enclosing struct's type name ("" for an anonymous
+	// struct or when the file doesn't parse).
+	StructName string
 	// SiblingFields are the names of the other fields in the same struct,
 	// in declaration order. Empty when the file doesn't parse.
 	SiblingFields []string
@@ -150,6 +155,16 @@ func findField(lines []string, line, open int, closed bool) (Context, bool) {
 
 // fieldAt finds a struct field whose tag literal starts at line:col (1-based).
 func fieldAt(fset *token.FileSet, file *ast.File, line, col int) (Context, bool) {
+	names := map[*ast.StructType]string{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		if ts, isSpec := n.(*ast.TypeSpec); isSpec {
+			if st, isStruct := ts.Type.(*ast.StructType); isStruct {
+				names[st] = ts.Name.Name
+			}
+		}
+		return true
+	})
+
 	var found Context
 	var ok bool
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -167,6 +182,7 @@ func fieldAt(fset *token.FileSet, file *ast.File, line, col int) (Context, bool)
 			p := fset.Position(f.Tag.Pos())
 			if p.Line == line && p.Column == col {
 				found, ok = describe(f), true
+				found.StructName = names[st]
 				for _, other := range st.Fields.List {
 					if other != f {
 						found.SiblingFields = append(found.SiblingFields, describe(other).FieldNames...)
@@ -184,32 +200,11 @@ func describe(f *ast.Field) Context {
 	ctx := Context{FieldType: types.ExprString(f.Type)}
 	if len(f.Names) == 0 {
 		ctx.Embedded = true
-		ctx.FieldNames = []string{embeddedName(f.Type)}
+		ctx.FieldNames = []string{pkgindex.EmbeddedName(f.Type)}
 		return ctx
 	}
 	for _, n := range f.Names {
 		ctx.FieldNames = append(ctx.FieldNames, n.Name)
 	}
 	return ctx
-}
-
-// embeddedName is the implicit field name of an embedded type:
-// *pkg.Base -> Base, Base[T] -> Base.
-func embeddedName(expr ast.Expr) string {
-	for {
-		switch e := expr.(type) {
-		case *ast.StarExpr:
-			expr = e.X
-		case *ast.SelectorExpr:
-			return e.Sel.Name
-		case *ast.IndexExpr:
-			expr = e.X
-		case *ast.IndexListExpr:
-			expr = e.X
-		case *ast.Ident:
-			return e.Name
-		default:
-			return types.ExprString(expr)
-		}
-	}
 }

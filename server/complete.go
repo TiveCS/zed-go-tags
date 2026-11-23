@@ -7,6 +7,8 @@ import (
 	"unicode/utf16"
 
 	"go-tags-ls/catalog"
+	"go-tags-ls/naming"
+	"go-tags-ls/pkgindex"
 	"go-tags-ls/tagctx"
 )
 
@@ -38,106 +40,139 @@ const (
 	insertTextFormatSnippet = 2
 )
 
+// request is one completion: the tag context plus what we know about the
+// field's type and the surrounding package.
+type request struct {
+	keys   []catalog.Key
+	idx    *pkgindex.Index
+	ctx    tagctx.Context
+	cursor position
+	class  catalog.Class // the field type's class, resolved through idx
+	items  []completionItem
+}
+
 // complete returns suggestions for the Struct Tag under the cursor.
 func (s *server) complete(p completionParams) []completionItem {
-	items := []completionItem{}
 	text, ok := s.docs[p.TextDocument.URI]
 	if !ok {
-		return items
+		return []completionItem{}
 	}
 	col, ok := byteColumn(text, p.Position)
 	if !ok {
-		return items
+		return []completionItem{}
 	}
 	ctx, ok := tagctx.At(text, p.Position.Line, col)
-	if !ok {
-		return items
+	if !ok || ctx.Position == tagctx.None {
+		return []completionItem{}
 	}
-	switch ctx.Position {
-	case tagctx.Key:
-		return keyItems(s.keys, ctx, p.Position)
-	case tagctx.Value:
-		return valueItems(s.keys, ctx, p.Position)
+	idx := s.packageIndex(p.TextDocument.URI, text)
+	rq := &request{
+		keys:   s.keys,
+		idx:    idx,
+		ctx:    ctx,
+		cursor: p.Position,
+		class:  catalog.Classify(ctx.FieldType, idx.Resolve),
+		items:  []completionItem{},
 	}
-	return items
+	if ctx.Position == tagctx.Key {
+		rq.keyItems()
+	} else {
+		rq.valueItems()
+	}
+	return rq.items
+}
+
+func (rq *request) field() string { return rq.ctx.FieldNames[0] } // grouped fields: first name
+
+// isStruct is true only for fields known to be structs (not unknown types).
+func (rq *request) isStruct() bool { return rq.class == catalog.Struct }
+
+func (rq *request) add(kind int, label, detail string, r lspRange, newText string, format int) {
+	rq.items = append(rq.items, completionItem{
+		Label:            label,
+		Kind:             kind,
+		Detail:           detail,
+		SortText:         fmt.Sprintf("%03d", len(rq.items)),
+		FilterText:       label,
+		InsertTextFormat: format,
+		TextEdit:         &textEdit{Range: r, NewText: newText},
+	})
+}
+
+// envPrefix is go-envconfig's nested-struct form: ", prefix=DATABASE_".
+func (rq *request) envPrefix() string {
+	return ", prefix=" + naming.Apply(naming.ScreamingSnake, rq.field()) + "_"
 }
 
 // keyItems suggests Tag Keys not yet in the tag. Picking one inserts the
 // whole pair, e.g. json:"user_id", with the value selected.
-func keyItems(keys []catalog.Key, ctx tagctx.Context, cursor position) []completionItem {
-	items := []completionItem{}
-	field := ctx.FieldNames[0] // grouped fields: use the first name
-	r := rangeBack(cursor, ctx.KeyPartial)
-	for i, k := range keys {
-		if slices.Contains(ctx.ExistingKeys, k.Name) {
+func (rq *request) keyItems() {
+	r := rangeBack(rq.cursor, rq.ctx.KeyPartial)
+	for _, k := range rq.keys {
+		if slices.Contains(rq.ctx.ExistingKeys, k.Name) {
 			continue
 		}
 		var snippet, detail string
-		if k.Kind == catalog.Rules {
+		switch {
+		case k.Kind == catalog.Rules:
 			snippet = k.Name + `:"$1"`
 			detail = k.Library
-		} else {
-			v := k.Value(field)
+		case k.Name == "env" && rq.isStruct():
+			prefix := strings.TrimPrefix(rq.envPrefix(), ", prefix=")
+			snippet = fmt.Sprintf(`env:", prefix=${1:%s}"`, escapeSnippet(prefix))
+			detail = fmt.Sprintf(`%s · env:", prefix=%s"`, k.Library, prefix)
+		default:
+			v := k.Value(rq.field())
 			snippet = fmt.Sprintf(`%s:"${1:%s}"`, k.Name, escapeSnippet(v))
 			detail = fmt.Sprintf(`%s · %s:"%s"`, k.Library, k.Name, v)
 		}
-		items = append(items, completionItem{
+		rq.items = append(rq.items, completionItem{
 			Label:            k.Name,
 			Kind:             completionKindProperty,
 			Detail:           detail,
-			SortText:         fmt.Sprintf("%02d", i),
+			SortText:         fmt.Sprintf("%02d", len(rq.items)),
 			FilterText:       k.Name,
 			InsertTextFormat: insertTextFormatSnippet,
 			TextEdit:         &textEdit{Range: r, NewText: snippet},
 		})
 	}
-	return items
 }
 
-// valueItems suggests the Tag Value derived from the field name.
-//
-// Inside a Tag Key's quotes the value is split into parts by the key's
-// separators. Named keys take the derived name in their first part (gorm:
-// in any part, as "column:..."); every other part takes Tag Options.
-func valueItems(keys []catalog.Key, ctx tagctx.Context, cursor position) []completionItem {
-	items := []completionItem{}
-	k, ok := catalog.Find(keys, ctx.Key)
+// valueItems suggests inside a Tag Key's quotes. The value is split into
+// parts by the key's separators. Named keys take the derived name in their
+// first part (gorm: in any part, as "column:..."); every other part takes
+// Tag Options, or Option Arguments once an option's ':' / '=' is typed.
+func (rq *request) valueItems() {
+	k, ok := catalog.Find(rq.keys, rq.ctx.Key)
 	if !ok {
-		return items
+		return
 	}
-	parts := k.Split(ctx.ValuePrefix)
+	parts := k.Split(rq.ctx.ValuePrefix)
 	current, done := parts[len(parts)-1], parts[:len(parts)-1]
 	typed := strings.TrimLeft(current, " ")
-	r := rangeBack(cursor, typed)
-	field := ctx.FieldNames[0]
-
-	add := func(label, detail, newText string, format int) {
-		items = append(items, completionItem{
-			Label:            label,
-			Kind:             completionKindValue,
-			Detail:           detail,
-			SortText:         fmt.Sprintf("%03d", len(items)),
-			FilterText:       label,
-			InsertTextFormat: format,
-			TextEdit:         &textEdit{Range: r, NewText: newText},
-		})
-	}
-	nameItems := func() {
-		v := k.Value(field)
-		add(v, fmt.Sprintf("%s from %s (%s)", k.Name, field, k.Style), v, insertTextFormatPlain)
-		if k.Skip {
-			add("-", "ignore this field", "-", insertTextFormatPlain)
-		}
-	}
+	r := rangeBack(rq.cursor, typed)
 
 	if o, arg, ok := k.ArgOption(typed); ok && (k.Kind == catalog.Rules || len(done) > 0 || k.Prefix != "") {
-		return argItems(o, arg, ctx, cursor)
+		rq.argItems(o, arg)
+		return
 	}
 
+	nameItems := func() {
+		if k.Name == "env" && rq.isStruct() {
+			p := rq.envPrefix()
+			rq.add(completionKindValue, p, "nested struct prefix (go-envconfig)", r, p, insertTextFormatPlain)
+			return
+		}
+		v := k.Value(rq.field())
+		rq.add(completionKindValue, v, fmt.Sprintf("%s from %s (%s)", k.Name, rq.field(), k.Style), r, v, insertTextFormatPlain)
+		if k.Skip {
+			rq.add(completionKindValue, "-", "ignore this field", r, "-", insertTextFormatPlain)
+		}
+	}
 	if k.Kind == catalog.Named {
 		if k.Prefix == "" && len(done) == 0 {
 			nameItems() // first part is the name; options come after a separator
-			return items
+			return
 		}
 		if k.Prefix != "" && !hasPrefixPart(done, k.Prefix) {
 			nameItems()
@@ -152,72 +187,184 @@ func valueItems(keys []catalog.Key, ctx tagctx.Context, cursor position) []compl
 	if k.SpaceAfterSep && len(parts) > 1 && current == "" {
 		lead = " " // env:"PORT,| -> env:"PORT, required
 	}
-	class := catalog.Classify(ctx.FieldType)
 	for _, o := range k.Options {
-		if k.Used(o, done) || (o.For != 0 && o.For&class == 0) {
+		if k.Used(o, done) || (o.For != 0 && o.For&rq.class == 0) {
 			continue
 		}
-		if o.TakesArg() {
-			add(o.Name, o.Detail, lead+escapeSnippet(o.Name)+"$1", insertTextFormatSnippet)
-		} else {
-			add(o.Name, o.Detail, lead+o.Name, insertTextFormatPlain)
-		}
+		rq.addOption(o, lead, r)
 	}
-	return items
+}
+
+func (rq *request) addOption(o catalog.Option, lead string, r lspRange) {
+	if o.TakesArg() {
+		rq.add(completionKindValue, o.Name, o.Detail, r, lead+escapeSnippet(o.Name)+"$1", insertTextFormatSnippet)
+	} else {
+		rq.add(completionKindValue, o.Name, o.Detail, r, lead+o.Name, insertTextFormatPlain)
+	}
 }
 
 // argItems suggests Option Arguments for option o, whose argument text so far is arg.
-func argItems(o catalog.Option, arg string, ctx tagctx.Context, cursor position) []completionItem {
-	items := []completionItem{}
-	// Field-reference arguments are space-separated tokens; replace only the last one.
+func (rq *request) argItems(o catalog.Option, arg string) {
+	if len(o.SubOptions) > 0 {
+		rq.subOptionItems(o, arg)
+		return
+	}
+	// Field and constant lists are space-separated tokens; replace only the last one.
 	tokens := strings.Split(arg, " ")
 	token := tokens[len(tokens)-1]
-	r := rangeBack(cursor, token)
-	add := func(label, detail string) {
-		items = append(items, completionItem{
-			Label:            label,
-			Kind:             completionKindValue,
-			Detail:           detail,
-			SortText:         fmt.Sprintf("%03d", len(items)),
-			FilterText:       label,
-			InsertTextFormat: insertTextFormatPlain,
-			TextEdit:         &textEdit{Range: r, NewText: label},
-		})
+	r := rangeBack(rq.cursor, token)
+	value := func(label, detail string) {
+		rq.add(completionKindValue, label, detail, r, label, insertTextFormatPlain)
 	}
 
-	switch o.FieldRef {
+	switch o.Source {
 	case catalog.OneField:
 		if len(tokens) == 1 {
-			for _, f := range ctx.SiblingFields {
-				add(f, "field")
+			for _, f := range rq.ctx.SiblingFields {
+				value(f, "field")
 			}
 		}
-		return items
+		return
 	case catalog.FieldList:
-		for _, f := range ctx.SiblingFields {
+		for _, f := range rq.ctx.SiblingFields {
 			if !slices.Contains(tokens[:len(tokens)-1], f) {
-				add(f, "field")
+				value(f, "field")
 			}
 		}
-		return items
+		return
 	case catalog.FieldPairs: // Field value Field value ...
 		if len(tokens)%2 == 1 {
-			for _, f := range ctx.SiblingFields {
-				add(f, "field")
+			for _, f := range rq.ctx.SiblingFields {
+				value(f, "field")
 			}
 		}
-		return items
+		return
+	case catalog.Constants:
+		rq.constantItems(tokens, r)
+		return
 	}
 
-	class := catalog.Classify(ctx.FieldType)
-	token = arg // plain arguments may contain spaces ("double precision")
-	r = rangeBack(cursor, token)
+	r = rangeBack(rq.cursor, arg) // other arguments may contain spaces ("double precision")
+	value = func(label, detail string) {
+		rq.add(completionKindValue, label, detail, r, label, insertTextFormatPlain)
+	}
+	switch o.Source {
+	case catalog.RelationFields:
+		rq.relationItems(value, true)
+		return
+	case catalog.RelatedFields:
+		rq.relationItems(value, false)
+		return
+	case catalog.PolymorphicPrefix:
+		name := pkgindex.ElemTypeName(rq.ctx.FieldType)
+		fields, _ := rq.idx.Struct(name)
+		for _, f := range fields {
+			if p, ok := strings.CutSuffix(f, "ID"); ok && p != "" && slices.Contains(fields, p+"Type") {
+				value(p, fmt.Sprintf("%s has %sID and %sType", name, p, p))
+			}
+		}
+		return
+	}
 	for _, a := range o.Args {
-		if a.Allows(class) {
-			add(a.Value, a.Detail)
+		if a.Allows(rq.class) {
+			value(a.Value, a.Detail)
 		}
 	}
-	return items
+}
+
+// relationItems suggests gorm relation fields: this struct's fields (when own
+// is set) and the related struct's, each labelled with its struct. A field in
+// both is listed once.
+func (rq *request) relationItems(value func(label, detail string), own bool) {
+	type entry struct {
+		name    string
+		structs []string
+	}
+	var entries []*entry
+	seen := map[string]*entry{}
+	addField := func(name, structName string) {
+		if e, ok := seen[name]; ok {
+			e.structs = append(e.structs, structName)
+			return
+		}
+		e := &entry{name: name, structs: []string{structName}}
+		seen[name] = e
+		entries = append(entries, e)
+	}
+	if own {
+		this := rq.ctx.StructName
+		if this == "" {
+			this = "this struct"
+		}
+		for _, f := range rq.ctx.SiblingFields {
+			addField(f, this)
+		}
+	}
+	related := pkgindex.ElemTypeName(rq.ctx.FieldType)
+	if fields, ok := rq.idx.Struct(related); ok && related != rq.ctx.StructName {
+		for _, f := range fields {
+			addField(f, related)
+		}
+	}
+	for _, e := range entries {
+		value(e.name, strings.Join(e.structs, " / ")+" field")
+	}
+}
+
+// constantItems suggests the typed constants of the field's type for oneof=:
+// all of them at once, then each one not yet listed.
+func (rq *request) constantItems(tokens []string, r lspRange) {
+	typeName := pkgindex.ElemTypeName(rq.ctx.FieldType)
+	if rq.idx == nil || typeName == "" {
+		return
+	}
+	var values, names []string
+	for _, c := range rq.idx.Consts[typeName] {
+		if c.Value == "" || strings.ContainsAny(c.Value, " \t") || slices.Contains(values, c.Value) {
+			continue // oneof= can't express empty or spaced values
+		}
+		values = append(values, c.Value)
+		names = append(names, c.Name)
+	}
+	listed := tokens[:len(tokens)-1]
+	if len(listed) == 0 && len(values) > 1 {
+		all := strings.Join(values, " ")
+		rq.add(completionKindValue, all, fmt.Sprintf("all %d %s values", len(values), typeName), r, all, insertTextFormatPlain)
+	}
+	for i, v := range values {
+		if !slices.Contains(listed, v) {
+			rq.add(completionKindValue, v, names[i], r, v, insertTextFormatPlain)
+		}
+	}
+}
+
+// subOptionItems handles options whose argument has its own ,-separated
+// options after a name: gorm index:idx_email,sort:desc,type:btree.
+func (rq *request) subOptionItems(o catalog.Option, arg string) {
+	parts := strings.Split(arg, ",")
+	if len(parts) == 1 {
+		return // still typing the index name
+	}
+	cur, done := parts[len(parts)-1], parts[1:len(parts)-1]
+	if i := strings.IndexByte(cur, ':'); i >= 0 {
+		r := rangeBack(rq.cursor, cur[i+1:])
+		for _, sub := range o.SubOptions {
+			if sub.Name == cur[:i+1] {
+				for _, a := range sub.Args {
+					if a.Allows(rq.class) {
+						rq.add(completionKindValue, a.Value, a.Detail, r, a.Value, insertTextFormatPlain)
+					}
+				}
+			}
+		}
+		return
+	}
+	r := rangeBack(rq.cursor, cur)
+	for _, sub := range o.SubOptions {
+		if !sub.UsedIn(done, true) {
+			rq.addOption(sub, "", r)
+		}
+	}
 }
 
 func hasPrefixPart(parts []string, prefix string) bool {

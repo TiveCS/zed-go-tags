@@ -16,9 +16,9 @@ func completeAt(t *testing.T, field string) []completionItem {
 	line := strings.Count(before, "\n")
 	char := len([]rune(before[strings.LastIndex(before, "\n")+1:])) // ASCII-only fixtures
 	s := newServer()
-	s.docs["file:///x.go"] = before + src[i+1:]
+	s.docs[testURI] = before + src[i+1:]
 	var p completionParams
-	p.TextDocument.URI = "file:///x.go"
+	p.TextDocument.URI = testURI
 	p.Position = position{Line: line, Character: char}
 	return s.complete(p)
 }
@@ -167,9 +167,13 @@ func TestOptions(t *testing.T) {
 	}{
 		{"json", "ID string `json:\"id,|\"`", []string{"omitempty", "omitzero", "string"}},
 		{"json hides used", "ID string `json:\"id,omitempty,|\"`", []string{"omitzero", "string"}},
-		{"yaml", "ID string `yaml:\"id,|\"`", []string{"omitempty", "flow", "inline"}},
-		{"mapstructure", "Base Base `mapstructure:\",|\"`", []string{"squash", "remain", "omitempty"}},
-		{"bson", "ID string `bson:\"id,|\"`", []string{"omitempty", "omitzero", "minsize", "truncate", "inline"}},
+		{"yaml on string", "ID string `yaml:\"id,|\"`", []string{"omitempty"}},
+		{"yaml on slice", "Tags []string `yaml:\"tags,|\"`", []string{"omitempty", "flow"}},
+		{"yaml on map", "Meta map[string]string `yaml:\"meta,|\"`", []string{"omitempty", "flow", "inline"}},
+		{"mapstructure unknown type", "Base Base `mapstructure:\",|\"`", []string{"squash", "remain", "omitempty"}},
+		{"bson on string", "ID string `bson:\"id,|\"`", []string{"omitempty", "omitzero"}},
+		{"bson on int64", "Count int64 `bson:\"count,|\"`", []string{"omitempty", "omitzero", "minsize", "truncate"}},
+		{"json string option not on slice", "Tags []string `json:\"tags,|\"`", []string{"omitempty", "omitzero"}},
 		{"env", "Port string `env:\"PORT,|\"`", []string{"default=", "required", "prefix=", "overwrite", "delimiter=", "separator=", "noinit", "decodeunset"}},
 		{"env hides used", "Port string `env:\"PORT, required, |\"`", []string{"default=", "prefix=", "overwrite", "delimiter=", "separator=", "noinit", "decodeunset"}},
 	}

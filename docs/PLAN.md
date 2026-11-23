@@ -1,6 +1,6 @@
 # Build Plan — Go Tags Autocomplete for Zed
 
-Status: **Phase 0 done** (verified in Zed 2026-11-23). **Phase 1 done** (verified in Zed). **Phase 2 done** (verified in Zed). **Phase 3 done** (verified in Zed). **Phase 3b done** (verified in Zed). **Phase 4 done** in tests; Zed check pending. Vocabulary: see [GLOSSARY.md](../GLOSSARY.md).
+Status: **Phase 0 done** (verified in Zed 2026-11-23). **Phase 1 done** (verified in Zed). **Phase 2 done** (verified in Zed). **Phase 3 done** (verified in Zed). **Phase 3b done** (verified in Zed). **Phase 4 done** (verified in Zed). **Phase 5 done** (local commit; not published). **Phase 6 done** in tests; Zed check pending. Vocabulary: see [GLOSSARY.md](../GLOSSARY.md).
 
 ## Repo layout
 
@@ -85,6 +85,22 @@ Suggest the text after `:` / `=` inside a Tag Option. Postgres only for now (MyS
 - GitHub Actions: cross-compile server (windows/linux/darwin × amd64/arm64) and attach to Releases.
 - Extension: use `PATH` binary if present, else download matching release asset.
 - README + MIT LICENSE. Public registry PR deferred.
+
+### Phase 6 — Depth (ships in v0.1.0, before publishing)
+Foundation: a **package index** — parse every `.go` file in the current file's folder (open files from Zed's live copy, the rest from disk; cached by modification time) into: struct types → their fields, named types → their underlying type, typed constants → their values.
+- Setting `type_search`: `"package"` (default) or `"file"` (only the current file).
+- Named types resolve through the index: `type Status string` now classifies as String (better validate filtering); a struct type classifies as **Struct** (new class).
+
+Features:
+- **G1 gorm relations** — `foreignKey:`, `references:`, `joinForeignKey:`, `joinReferences:` suggest fields of this struct *and* of the related struct (from the field's type: `Order`, `*Order`, `[]Order`, `[]*Order`), each labelled with its struct. Belongs-to vs has-one/has-many can't be told apart from syntax, so both sides are offered.
+- **G2 gorm index sub-options** — after `index:name` / `uniqueIndex:name`, a `,` offers `unique`, `sort:desc`, `sort:asc`, `type:btree`, `type:hash`, `type:gin`, `type:gist`, `where:`, `composite:`, `priority:`, `expression:`, `class:`, `length:`, `option:`.
+- **G5 gorm arguments** — `autoCreateTime:` / `autoUpdateTime:` → `milli`, `nano`; `polymorphic:` → struct names in the package; new settings `polymorphicType:`, `polymorphicId:`, `polymorphicValue:`, `autoIncrementIncrement:`.
+- **G6 gorm settings filtered by type** — e.g. `autoIncrement` ints only, `precision:`/`scale:` floats, `autoCreateTime` time/ints, `size:` strings/ints, relation settings only on struct/slice-of-struct fields.
+- **V1 validate `oneof=` from constants** — for a field of named type `T`, suggest the typed constants of `T` in the package: one item with all values space-separated, plus each value. Supports explicit string/number literals and simple `iota` / `iota + n` sequences.
+- **O1 options filtered by type** — `json:",string"` numbers/bools/strings; `yaml:",flow"` slices/maps/structs; `yaml:",inline"` / `bson:",inline"` structs/maps; `bson:",minsize"` int64; `bson:",truncate"` ints; `mapstructure:",squash"` structs; `,remain` maps; `xml:",attr"`/`chardata`/`cdata` non-struct.
+- **O2 env on struct fields** — for a struct-typed field, the env value suggestion is `, prefix=DATABASE_` (go-envconfig nested struct) instead of a variable name.
+
+**Done when:** package index tests (multi-file, live-buffer override, cache refresh), tests per feature, README documents `type_search`.
 
 ## Facts verified in Phase 0
 - `zed_extension_api` 0.7.0; `language_server_command(&mut self, &LanguageServerId, &Worktree) -> Result<Command>`.
