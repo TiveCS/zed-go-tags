@@ -2,7 +2,7 @@ id = "go-tags"
 name = "Go Tags Autocomplete"
 version = "0.1.0"
 schema_version = 1
-authors = ["Ahmad Fathan Hanif"]
+authors = ["Ahmad Fathan Hanif <ahmadfathanhanif@gmail.com>"]
 description = "Autocomplete for Go struct tags (json, validate, gorm, env, ...)."
 repository = "https://github.com/TiveCS/zed-go-tags"
 
