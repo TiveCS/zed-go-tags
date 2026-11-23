@@ -1,6 +1,6 @@
 # Build Plan — Go Tags Autocomplete for Zed
 
-Status: **Phase 0 done** (verified in Zed 2026-11-23). **Phase 1 done** (verified in Zed). **Phase 2 done** (verified in Zed). **Phase 3 done** (verified in Zed). **Phase 3b done** (verified in Zed). **Phase 4 done** (verified in Zed). **Phase 5 done** (local commit; not published). **Phase 6 done** in tests; Zed check pending. Vocabulary: see [GLOSSARY.md](../GLOSSARY.md).
+Status: **Phase 0 done** (verified in Zed 2026-11-23). **Phase 1 done** (verified in Zed). **Phase 2 done** (verified in Zed). **Phase 3 done** (verified in Zed). **Phase 3b done** (verified in Zed). **Phase 4 done** (verified in Zed). **Phase 5 done** (local commit; not published). **Phase 6 done** (verified in Zed). Vocabulary: see [GLOSSARY.md](../GLOSSARY.md).
 
 ## Repo layout
 
