@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "zed-go-tags"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "zed_extension_api",
 ]
