@@ -1,0 +1,45 @@
+name: Release
+
+# Push a tag like v0.1.0 to build the language server for every platform
+# and publish it as a GitHub Release. The Zed extension downloads
+# go-tags-ls-<os>-<arch>.gz from the latest release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Test
+        working-directory: server
+        run: go test ./...
+
+      - name: Build
+        working-directory: server
+        env:
+          CGO_ENABLED: "0"
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p ../dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "go-tags-ls-$os-$arch" .
+            gzip -9 -c "go-tags-ls-$os-$arch" > "../dist/go-tags-ls-$os-$arch.gz"
+          done
+          ls -l ../dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/*.gz --title "${{ github.ref_name }}" --generate-notes
